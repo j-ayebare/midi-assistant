@@ -1,0 +1,12 @@
+node_modules/
+dist/
+uploads/*.mid
+generated/*.mid
+__pycache__/
+*.pyc
+.git/
+.vs/
+.env
+test_*.py
+*.slnx.sqlite
+Summary.rtf
