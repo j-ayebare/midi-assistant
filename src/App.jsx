@@ -40,7 +40,7 @@ function App() {
 
   async function loadFiles() {
     try {
-      const response = await fetch('http://localhost:8000/api/files')
+      const response = await fetch('/api/files')
       const data = await response.json()
       setFiles(data.files)
     } catch (error) {
@@ -52,7 +52,7 @@ function App() {
     setIsParsing(true)
     setMidiData(null)
     try {
-      const response = await fetch(`http://localhost:8000/api/files/${filename}/parse`)
+      const response = await fetch(`/api/files/${filename}/parse`)
       if (!response.ok) throw new Error('Parse failed')
       const data = await response.json()
       setMidiData(data)
@@ -107,7 +107,7 @@ function App() {
   async function uploadFile(file) {
     const formData = new FormData()
     formData.append('file', file)
-    const response = await fetch('http://localhost:8000/api/upload', {
+    const response = await fetch('/api/upload', {
       method: 'POST',
       body: formData
     })
@@ -121,7 +121,7 @@ function App() {
   async function handleDelete(filename) {
     if (!confirm('Delete this file?')) return
     try {
-      const response = await fetch(`http://localhost:8000/api/files/${filename}`, {
+      const response = await fetch(`/api/files/${filename}`, {
         method: 'DELETE'
       })
       if (!response.ok) throw new Error('Delete failed')
