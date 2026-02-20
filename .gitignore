@@ -1,0 +1,50 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── Python ──
+__pycache__/
+*.pyc
+*.egg-info/
+.env
+
+# ── Uploaded/Generated files ──
+uploads/
+generated/
+uploads/*.mid
+generated/*.mid
+
+# ── OS ──
+Thumbs.db
+
+# ── Test files (optional, remove these lines if you want them in the repo) ──
+test_*.py
+
+# ── Visual Studio ──
+.vs/
+*.slnx.sqlite
+
+# ── Project notes (local only) ──
+Summary.rtf
+projectt summary.txt
