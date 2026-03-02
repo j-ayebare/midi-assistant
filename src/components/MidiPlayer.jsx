@@ -139,7 +139,6 @@ function MidiPlayer({ parsedMidi, filename }) {
 
     ;(parsedMidi.tracks || []).forEach(track => {
       if (track.is_drum) return // Skip drums for now
-      // TODO: Add drum support with Tone.NoiseSynth or drum sampler
 
       ;(track.notes || []).forEach(note => {
         // Calculate times — support both old parser (ticks only) and new (seconds)
@@ -156,9 +155,12 @@ function MidiPlayer({ parsedMidi, filename }) {
           // We use it (not Date.now) for sample-accurate timing.
           if (synthRef.current) {
             try {
+              // Scale duration with playback rate so notes don't
+              // overlap when sped up or gap when slowed down
+              const scaledDur = durSec / Tone.getTransport().playbackRate
               synthRef.current.triggerAttackRelease(
                 midiToToneName(note.pitch),
-                durSec,
+                scaledDur,
                 time,
                 note.velocity / 127  // velocity as gain 0-1
               )
