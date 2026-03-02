@@ -183,37 +183,50 @@ function PianoRoll({ parsedMidi, currentTime = 0, isPlaying = false, onSeek }) {
     return (layout.maxPitch - pitch) * NOTE_HEIGHT - scrollY + HEADER_HEIGHT
   }, [layout, scrollY])
 
-  // ── Auto-scroll: snap on play, follow during playback ──
+  // ── Auto-scroll: responsive follow ──
+  // Handles all cases: play start, during playback, seek while paused,
+  // and full stop. The playhead position comes from Transport.seconds
+  // which represents song position (0 to duration) regardless of speed.
+  // At 2× speed the playhead moves through pixels faster in wall-clock
+  // time, but the positions are the same — so the piano roll stays in sync.
   useEffect(() => {
     if (!layout) return
 
-    if (isPlaying) {
-      const headX = currentTime * pxPerSec
+    const headX = currentTime * pxPerSec
 
+    if (isPlaying) {
       if (!wasPlayingRef.current) {
         // Just started playing: SNAP view so playhead is 10% from left
         setScrollX(Math.max(0, headX - gridWidth * 0.1))
         wasPlayingRef.current = true
       } else {
-        // Already playing: smooth follow when playhead nears right edge
-        const rightThreshold = scrollX + gridWidth * 0.85
+        // Already playing: follow when playhead passes 75% of visible area
+        const leftEdge = scrollX
+        const rightThreshold = scrollX + gridWidth * 0.75
+
         if (headX > rightThreshold) {
+          // Jump ahead so playhead is at 15% from left
           setScrollX(Math.max(0, headX - gridWidth * 0.15))
+        } else if (headX < leftEdge) {
+          // Playhead went backwards (seek during playback) — snap to it
+          setScrollX(Math.max(0, headX - gridWidth * 0.1))
         }
       }
     } else {
-      // Paused — keep flag true so resume doesn't jump
-      wasPlayingRef.current = true
+      // Not playing
+      if (currentTime === 0) {
+        // Fully stopped — reset view to start
+        wasPlayingRef.current = false
+        setScrollX(0)
+      } else {
+        // Paused mid-song — if playhead is off-screen, snap to it
+        const headVisible = headX >= scrollX && headX <= scrollX + gridWidth
+        if (!headVisible) {
+          setScrollX(Math.max(0, headX - gridWidth * 0.1))
+        }
+      }
     }
   }, [currentTime, isPlaying, pxPerSec, gridWidth, layout, scrollX])
-
-  // ── When fully stopped (time resets to 0), reset scroll ──
-  useEffect(() => {
-    if (!isPlaying && currentTime === 0) {
-      wasPlayingRef.current = false
-      setScrollX(0)
-    }
-  }, [isPlaying, currentTime])
 
   // ═══════════════════════════════════════════
   // DRAWING — Piano Sidebar
