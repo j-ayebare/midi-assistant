@@ -15,10 +15,12 @@
  *
  * Speed control approach:
  *   We modify Tone.Transport.bpm directly (baseBPM × speed multiplier).
- *   This changes how fast Transport.seconds advances in wall-clock time,
- *   but the scheduled positions stay the same — a note at second 10.0
- *   is still at position 10.0, it just arrives sooner/later in real time.
- *   Note durations are scaled inversely so they sound proportionally correct.
+ *   This changes when scheduled note events fire in wall-clock time.
+ *   We track song position ourselves using a wall-clock anchor system:
+ *     position = anchorPosition + (wallTimeElapsed × speed)
+ *   This is necessary because Transport.seconds always ticks at 1:1
+ *   with real time regardless of BPM — it doesn't give us a speed-
+ *   adjusted position for the piano roll playhead.
  *
  * Props:
  *   parsedMidi — output from backend parse_midi()
@@ -98,6 +100,39 @@ function MidiPlayer({ parsedMidi, filename }) {
   const durationRef = useRef(0)         // Total song duration in seconds
   const baseBpmRef = useRef(120)        // Original BPM from the MIDI file
 
+  // ── Position tracking anchor ──
+  // We track song position ourselves because Transport.seconds doesn't
+  // scale with BPM changes. The anchor records a known (wallTime, songPos)
+  // pair plus the current speed. From there we extrapolate:
+  //   currentSongPos = anchorSongPos + (wallElapsed × speed)
+  // The anchor resets on: play, pause, seek, speed change, new file.
+  const anchorRef = useRef({
+    wallTime: 0,       // performance.now() when anchor was set
+    songPos: 0,        // song position (seconds) at anchor time
+    speed: 1.0,        // speed multiplier at anchor time
+  })
+
+  // ═══════════════════════════════════════════
+  // POSITION TRACKING HELPERS
+  // ═══════════════════════════════════════════
+
+  /** Reset the anchor — call whenever position or speed changes */
+  const resetAnchor = useCallback((songPos, currentSpeed) => {
+    anchorRef.current = {
+      wallTime: performance.now(),
+      songPos: songPos,
+      speed: currentSpeed,
+    }
+  }, [])
+
+  /** Calculate current song position from anchor + elapsed wall time */
+  const getSongPosition = useCallback(() => {
+    const anchor = anchorRef.current
+    const elapsed = (performance.now() - anchor.wallTime) / 1000
+    const pos = anchor.songPos + elapsed * anchor.speed
+    return Math.min(pos, durationRef.current)
+  }, [])
+
   // ═══════════════════════════════════════════
   // SYNTH LIFECYCLE
   // ═══════════════════════════════════════════
@@ -145,13 +180,16 @@ function MidiPlayer({ parsedMidi, filename }) {
     // Reset speed state for new file
     setSpeed(1.0)
 
+    // Reset position anchor for new file
+    anchorRef.current = { wallTime: 0, songPos: 0, speed: 1.0 }
+
     // ── Schedule every note on Tone.Transport ──
     // We schedule ALL notes ahead of time. Transport.start()/stop()
     // controls when they fire. This is how Tone.js recommends doing it.
     //
     // Notes are scheduled at their original second positions.
-    // When BPM changes, Transport advances faster/slower through
-    // these positions, so notes fire sooner/later in wall-clock time.
+    // When BPM changes, Transport fires events faster/slower
+    // relative to wall-clock time.
     const events = []
 
     ;(parsedMidi.tracks || []).forEach(track => {
@@ -216,28 +254,35 @@ function MidiPlayer({ parsedMidi, filename }) {
   // ═══════════════════════════════════════════
 
   /**
-   * While playing, poll Tone.Transport.seconds at 60fps
-   * and push it into React state for the PianoRoll playhead.
+   * While playing, calculate song position at 60fps using our
+   * anchor-based system and push it into React state for the
+   * PianoRoll playhead.
    *
-   * Transport.seconds represents SONG POSITION (0 to duration),
-   * not wall-clock time. When BPM is doubled, Transport.seconds
-   * advances twice as fast in real time but the values still
-   * correspond to the same note positions. This means the piano
-   * roll playhead automatically moves faster at higher speeds.
+   * Why not use Transport.seconds?
+   *   Transport.seconds ticks at 1:1 with wall-clock time regardless
+   *   of BPM. Changing BPM only affects when scheduled events fire,
+   *   not how the seconds counter advances. So at 2× BPM the notes
+   *   play faster but Transport.seconds still takes the full original
+   *   duration to reach the end — the playhead wouldn't speed up.
+   *
+   * Our anchor system fixes this:
+   *   position = anchorPos + (wallElapsed × speed)
+   *   At 2× speed, position advances twice as fast → playhead moves
+   *   through the piano roll at double speed, matching the audio.
    *
    * Why RAF instead of Tone's built-in events?
-   * - We need ~60fps updates for smooth playhead animation
-   * - Tone events are for audio scheduling, not UI updates
-   * - RAF naturally syncs with the browser's paint cycle
+   *   - We need ~60fps updates for smooth playhead animation
+   *   - Tone events are for audio scheduling, not UI updates
+   *   - RAF naturally syncs with the browser's paint cycle
    */
   const startTimeTracking = useCallback(() => {
     const tick = () => {
-      const pos = Tone.getTransport().seconds
+      const pos = getSongPosition()
       setCurrentTime(pos)
       rafRef.current = requestAnimationFrame(tick)
     }
     rafRef.current = requestAnimationFrame(tick)
-  }, [])
+  }, [getSongPosition])
 
   const stopTimeTracking = useCallback(() => {
     if (rafRef.current) {
@@ -257,16 +302,23 @@ function MidiPlayer({ parsedMidi, filename }) {
     // This is a browser security requirement — not a Tone limitation.
     await Tone.start()
 
+    // Set anchor so position tracking knows where we're starting from
+    resetAnchor(currentTime, speed)
+
     Tone.getTransport().start()
     setIsPlaying(true)
     startTimeTracking()
-  }, [isLoaded, startTimeTracking])
+  }, [isLoaded, startTimeTracking, currentTime, speed, resetAnchor])
 
   const handlePause = useCallback(() => {
     Tone.getTransport().pause()
     setIsPlaying(false)
     stopTimeTracking()
-  }, [stopTimeTracking])
+
+    // Freeze current position so resume starts from here
+    const pos = getSongPosition()
+    setCurrentTime(pos)
+  }, [stopTimeTracking, getSongPosition])
 
   const handleStop = useCallback(() => {
     Tone.getTransport().stop()
@@ -275,11 +327,14 @@ function MidiPlayer({ parsedMidi, filename }) {
     setCurrentTime(0)
     stopTimeTracking()
 
+    // Reset anchor to start
+    resetAnchor(0, speed)
+
     // Release any stuck notes
     if (synthRef.current) {
       synthRef.current.releaseAll()
     }
-  }, [stopTimeTracking])
+  }, [stopTimeTracking, speed, resetAnchor])
 
   /** Toggle play/pause — convenient for a single button */
   const handlePlayPause = useCallback(() => {
@@ -306,12 +361,15 @@ function MidiPlayer({ parsedMidi, filename }) {
     Tone.getTransport().seconds = clamped
     setCurrentTime(clamped)
 
+    // Reset anchor at new position
+    resetAnchor(clamped, speed)
+
     // Resume if we were playing
     if (wasPlaying) {
       Tone.getTransport().start()
       startTimeTracking()
     }
-  }, [isPlaying, startTimeTracking])
+  }, [isPlaying, startTimeTracking, speed, resetAnchor])
 
   // ═══════════════════════════════════════════
   // SEEK BAR — click on the progress bar
@@ -327,17 +385,26 @@ function MidiPlayer({ parsedMidi, filename }) {
 
   // ═══════════════════════════════════════════
   // SPEED CONTROL — changes actual BPM
+  // When speed changes mid-playback, we need to:
+  // 1. Record where we are in the song right now
+  // 2. Reset the anchor so position tracking uses the new speed
+  // 3. Update Tone's BPM so notes fire at the new rate
   // ═══════════════════════════════════════════
 
   const handleSpeedChange = useCallback((newSpeed) => {
+    // Capture current position before changing speed
+    const currentPos = isPlaying ? getSongPosition() : currentTime
+
     setSpeed(newSpeed)
 
-    // Change the actual BPM — this speeds up/slows down everything:
-    // note triggers, transport position advancement, effective tempo.
-    // Note durations are scaled inversely in the schedule callback.
+    // Reset anchor at current position with new speed
+    resetAnchor(currentPos, newSpeed)
+    setCurrentTime(currentPos)
+
+    // Change the actual BPM — this speeds up/slows down note triggers
     const newBpm = baseBpmRef.current * newSpeed
     Tone.getTransport().bpm.value = newBpm
-  }, [])
+  }, [isPlaying, getSongPosition, currentTime, resetAnchor])
 
   // ═══════════════════════════════════════════
   // CLEANUP — stop everything when component unmounts
@@ -373,7 +440,6 @@ function MidiPlayer({ parsedMidi, filename }) {
   const duration = durationRef.current
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0
   const baseBpm = baseBpmRef.current
-  const currentBpm = Math.round(baseBpm * speed)
 
   return (
     <div className="midi-player">
